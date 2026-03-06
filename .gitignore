@@ -1,0 +1,18 @@
+# Keep only the iOS app project in version control.
+# Ignore everything by default, then allowlist required build files.
+*
+
+!/.gitignore
+!/README.md
+!/screenshot.jpeg
+!/ScrollSnap/
+!/ScrollSnap/**
+
+# Ignore local/Xcode-generated state even inside ScrollSnap/
+.DS_Store
+ScrollSnap/**/xcuserdata/
+ScrollSnap/**/*.xcuserstate
+ScrollSnap/**/DerivedData/
+ScrollSnap/**/build/
+ScrollSnap/**/.build/
+ScrollSnap/**/Packages/
