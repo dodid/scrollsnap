@@ -3,6 +3,7 @@ import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
 import UIKit
+import LinkPresentation
 
 struct VideoTransferable: Transferable {
     let url: URL
@@ -77,4 +78,46 @@ struct ActivitySheet: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
+}
+
+final class ImageActivityItemSource: NSObject, UIActivityItemSource {
+    private let image: UIImage
+    private let title: String
+
+    init(image: UIImage, title: String) {
+        self.image = image
+        self.title = title
+    }
+
+    func activityViewControllerPlaceholderItem(_ activityViewController: UIActivityViewController) -> Any {
+        image
+    }
+
+    func activityViewController(
+        _ activityViewController: UIActivityViewController,
+        itemForActivityType activityType: UIActivity.ActivityType?
+    ) -> Any? {
+        image
+    }
+
+    func activityViewController(
+        _ activityViewController: UIActivityViewController,
+        dataTypeIdentifierForActivityType activityType: UIActivity.ActivityType?
+    ) -> String {
+        UTType.jpeg.identifier
+    }
+
+    func activityViewController(
+        _ activityViewController: UIActivityViewController,
+        subjectForActivityType activityType: UIActivity.ActivityType?
+    ) -> String {
+        title
+    }
+
+    func activityViewControllerLinkMetadata(_ activityViewController: UIActivityViewController) -> LPLinkMetadata? {
+        let metadata = LPLinkMetadata()
+        metadata.title = title
+        metadata.imageProvider = NSItemProvider(object: image)
+        return metadata
+    }
 }

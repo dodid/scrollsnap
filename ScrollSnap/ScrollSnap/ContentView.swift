@@ -387,17 +387,18 @@ private struct ProcessView: View {
                 .disabled(isSavingToPhotos)
                 .accessibilityLabel("Save image")
 
-                ShareLink(item: ExportableImage(sourceURL: libraryStore.imageURL(for: item), displayName: item.displayName),
-                          preview: SharePreview(item.displayName, image: Image(uiImage: libraryStore.image(for: item) ?? UIImage()))) {
-                    Image(systemName: "square.and.arrow.up")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .frame(width: 38, height: 38)
-                        .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                if let image = libraryStore.image(for: item) {
+                    ImageShareButton(image: image, displayName: item.displayName) {
+                        Image(systemName: "square.and.arrow.up")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: 38, height: 38)
+                            .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .controlSize(.small)
+                    .accessibilityLabel("Share image")
                 }
-                .buttonStyle(.plain)
-                .controlSize(.small)
-                .accessibilityLabel("Share image")
             }
         } else {
             HStack(spacing: 8) {
@@ -412,14 +413,15 @@ private struct ProcessView: View {
                 .disabled(isSavingToPhotos)
                 .accessibilityLabel("Save image")
 
-                ShareLink(item: ExportableImage(sourceURL: libraryStore.imageURL(for: item), displayName: item.displayName),
-                          preview: SharePreview(item.displayName, image: Image(uiImage: libraryStore.image(for: item) ?? UIImage()))) {
-                    Label("Share", systemImage: "square.and.arrow.up")
-                        .frame(width: 94)
+                if let image = libraryStore.image(for: item) {
+                    ImageShareButton(image: image, displayName: item.displayName) {
+                        Label("Share", systemImage: "square.and.arrow.up")
+                            .frame(width: 94)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .accessibilityLabel("Share image")
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .accessibilityLabel("Share image")
             }
         }
     }
@@ -763,8 +765,7 @@ private struct LibraryDetailView: View {
                 }
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) {
-                        ShareLink(item: ExportableImage(sourceURL: libraryStore.imageURL(for: item), displayName: item.displayName),
-                                  preview: SharePreview(item.displayName, image: Image(uiImage: image))) {
+                        ImageShareButton(image: image, displayName: item.displayName) {
                             Image(systemName: "square.and.arrow.up")
                         }
                     }
@@ -827,19 +828,21 @@ private struct LibraryDetailView: View {
 
 // MARK: - Video Timeline
 
-/// Transferable wrapper that exports the image file under its display name (e.g. "Image 0001.jpg").
-private struct ExportableImage: Transferable {
-    let sourceURL: URL
+private struct ImageShareButton<Label: View>: View {
+    let image: UIImage
     let displayName: String
+    @ViewBuilder let label: () -> Label
 
-    static var transferRepresentation: some TransferRepresentation {
-        FileRepresentation(exportedContentType: .jpeg) { exportable in
-            let dest = FileManager.default.temporaryDirectory
-                .appendingPathComponent("\(exportable.displayName).jpg")
-            // Overwrite any stale temp copy.
-            try? FileManager.default.removeItem(at: dest)
-            try FileManager.default.copyItem(at: exportable.sourceURL, to: dest)
-            return SentTransferredFile(dest)
+    @State private var isShowingShareSheet = false
+
+    var body: some View {
+        Button {
+            isShowingShareSheet = true
+        } label: {
+            label()
+        }
+        .sheet(isPresented: $isShowingShareSheet) {
+            ActivitySheet(activityItems: [ImageActivityItemSource(image: image, title: displayName)])
         }
     }
 }
