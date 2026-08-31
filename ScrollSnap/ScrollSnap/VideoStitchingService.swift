@@ -72,9 +72,10 @@ struct StitchSamplingPolicy {
     let maximumSpacing: Double = 0.15
     let minimumCommitShift = 10
     let minimumConfidence: Float = 0.8
+    let maximumConsecutiveRetries = 3
 
     var initialSpacing: Double {
-        min(maximumSpacing, max(minimumSpacing, 0.05))
+        minimumSpacing
     }
 
     var targetShift: Int {
@@ -101,6 +102,12 @@ struct StitchSamplingPolicy {
         guard shift > 0, elapsed > 0 else { return initialSpacing }
         let velocity = Double(shift) / elapsed
         return min(maximumSpacing, max(minimumSpacing, Double(targetShift) / velocity))
+    }
+
+    func nextTime(after sampledTime: Double, spacing: Double, endTime: Double) -> Double? {
+        guard endTime > sampledTime else { return nil }
+        let nextTime = min(endTime, sampledTime + max(minimumSpacing, spacing))
+        return nextTime > sampledTime ? nextTime : nil
     }
 }
 
@@ -304,7 +311,9 @@ actor VideoStitchingService {
         let matchWidth = W - horizontalInset * 2
         let refRect = CGRect(x: horizontalInset, y: refY, width: matchWidth, height: bandHeight)
         let searchRect = CGRect(x: horizontalInset, y: yStart, width: matchWidth, height: refY + bandHeight)
-        let matchScale: CGFloat = 0.5
+        let rawTemplatePixels = max(1, matchWidth * bandHeight)
+        let targetTemplatePixels = 30_000.0
+        let matchScale = CGFloat(min(0.5, max(0.25, sqrt(targetTemplatePixels / Double(rawTemplatePixels)))))
         let samplingPolicy = StitchSamplingPolicy(
             frameHeight: H,
             maximumSearchShift: refY,
@@ -339,10 +348,12 @@ actor VideoStitchingService {
         var candidateTime = min(safeEnd, referenceTime + spacing)
         var furthestSampleTime = effectiveStart
         var firstFailedCandidateTime: Double?
+        var consecutiveRetryCount = 0
         var cumulativeShift = 0
 
         samplingLoop: while candidateTime > referenceTime && candidateTime <= safeEnd {
             try Task.checkCancellation()
+            let sampledTime = candidateTime
 
             let candidateFrame: CGImage
             do {
@@ -403,9 +414,13 @@ actor VideoStitchingService {
                     tailFrame = candidateFrame
                     referenceData = getGrayscalePixels(from: candidateFrame, rect: refRect, scale: matchScale)
                     firstFailedCandidateTime = nil
+                    consecutiveRetryCount = 0
                     spacing = await samplingPolicy.initialSpacing
                     if referenceData == nil || isFinalCandidate { break samplingLoop }
-                    candidateTime = min(safeEnd, referenceTime + spacing)
+                    guard let nextTime = await samplingPolicy.nextTime(after: sampledTime, spacing: spacing, endTime: safeEnd) else {
+                        break samplingLoop
+                    }
+                    candidateTime = nextTime
                     continue samplingLoop
                 }
                 canvasSlices.append(slice)
@@ -417,19 +432,27 @@ actor VideoStitchingService {
                 referenceData = getGrayscalePixels(from: candidateFrame, rect: refRect, scale: matchScale)
                 if referenceData == nil { break samplingLoop }
                 firstFailedCandidateTime = nil
+                consecutiveRetryCount = 0
                 spacing = await samplingPolicy.spacing(afterShift: shift, elapsed: elapsed)
 
                 if isFinalCandidate { break samplingLoop }
-                candidateTime = min(safeEnd, referenceTime + spacing)
+                guard let nextTime = await samplingPolicy.nextTime(after: sampledTime, spacing: spacing, endTime: safeEnd) else {
+                    break samplingLoop
+                }
+                candidateTime = nextTime
 
             case .accumulate:
                 firstFailedCandidateTime = nil
+                consecutiveRetryCount = 0
                 if isFinalCandidate {
                     tailFrame = candidateFrame
                     break samplingLoop
                 }
                 spacing = min(samplingPolicy.maximumSpacing, spacing * 1.35)
-                candidateTime = min(safeEnd, candidateTime + spacing)
+                guard let nextTime = await samplingPolicy.nextTime(after: sampledTime, spacing: spacing, endTime: safeEnd) else {
+                    break samplingLoop
+                }
+                candidateTime = nextTime
 
             case .retry:
                 if isFinalCandidate {
@@ -438,30 +461,32 @@ actor VideoStitchingService {
                     break samplingLoop
                 }
 
-                if firstFailedCandidateTime == nil && elapsed > minimumSpacing * 1.25 {
-                    firstFailedCandidateTime = candidateTime
-                    spacing = max(minimumSpacing, elapsed / 2)
-                    candidateTime = referenceTime + spacing
-                } else {
-                    let failedAt = firstFailedCandidateTime ?? candidateTime
-                    firstFailedCandidateTime = failedAt
-                    if candidateTime - failedAt > 0.6 {
-                        print("[Stitch] Could not align \(String(format: "%.3f", failedAt))–\(String(format: "%.3f", candidateTime)); skipping that span and rebasing.")
-                        referenceFrame = candidateFrame
-                        referenceTime = candidateTime
-                        tailFrame = candidateFrame
-                        referenceData = getGrayscalePixels(from: candidateFrame, rect: refRect, scale: matchScale)
-                        firstFailedCandidateTime = nil
-                        spacing = await samplingPolicy.initialSpacing
-                        if referenceData == nil { break samplingLoop }
-                        candidateTime = min(safeEnd, referenceTime + spacing)
-                        continue samplingLoop
-                    }
-                    candidateTime = min(safeEnd, max(candidateTime + minimumSpacing, failedAt + minimumSpacing))
+                firstFailedCandidateTime = firstFailedCandidateTime ?? sampledTime
+                consecutiveRetryCount += 1
+
+                if consecutiveRetryCount >= samplingPolicy.maximumConsecutiveRetries {
+                    let failedAt = firstFailedCandidateTime ?? sampledTime
+                    print("[Stitch] Could not align \(String(format: "%.3f", failedAt))–\(String(format: "%.3f", sampledTime)); skipping that span and rebasing.")
+                    referenceFrame = candidateFrame
+                    referenceTime = sampledTime
+                    tailFrame = candidateFrame
+                    referenceData = getGrayscalePixels(from: candidateFrame, rect: refRect, scale: matchScale)
+                    firstFailedCandidateTime = nil
+                    consecutiveRetryCount = 0
+                    spacing = await samplingPolicy.initialSpacing
+                    if referenceData == nil { break samplingLoop }
                 }
+
+                guard let nextTime = await samplingPolicy.nextTime(after: sampledTime, spacing: minimumSpacing, endTime: safeEnd) else {
+                    break samplingLoop
+                }
+                candidateTime = nextTime
             }
 
-            if candidateTime <= referenceTime { break }
+            guard candidateTime > sampledTime else {
+                assertionFailure("Stitch sampling must always move forward")
+                break
+            }
         }
 
         let tailY = centerY + bandHalfHeight

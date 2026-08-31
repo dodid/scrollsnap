@@ -51,4 +51,16 @@ struct ScrollSnapTests {
         #expect(smallWindow.spacing(afterShift: 90, elapsed: 0.1) < smallWindow.spacing(afterShift: 15, elapsed: 0.1))
         #expect(smallWindow.spacing(afterShift: 1, elapsed: 1) == smallWindow.maximumSpacing)
     }
+
+    @Test func samplingPolicyAlwaysAdvancesCandidateTime() {
+        let policy = StitchSamplingPolicy(frameHeight: 480, maximumSearchShift: 120, minimumSpacing: 1 / 60)
+
+        let afterNegativeSpacing = policy.nextTime(after: 0.5, spacing: -1, endTime: 1)
+        let clampedToEnd = policy.nextTime(after: 0.99, spacing: 0.1, endTime: 1)
+
+        #expect(afterNegativeSpacing != nil)
+        #expect(afterNegativeSpacing! > 0.5)
+        #expect(clampedToEnd == 1)
+        #expect(policy.nextTime(after: 1, spacing: 0.1, endTime: 1) == nil)
+    }
 }
