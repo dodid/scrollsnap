@@ -80,3 +80,9 @@
 "or buy a coffee" = "또는 커피로 응원하기";
 "Leave a Review on the App Store" = "App Store에 리뷰 남기기";
 "Three Coffees" = "커피 세 잔";
+"Adjust Stitch Window" = "스티치 영역 조정";
+"Use the largest clean area you can, keeping fixed controls and other non-scrolling content outside the window." = "고정된 컨트롤과 스크롤되지 않는 콘텐츠는 창 밖에 두고, 가능한 한 넓고 깨끗한 영역을 사용하세요.";
+"Drag the window to move it. Drag its top or bottom edge to resize it." = "영역을 드래그하여 이동하세요. 위쪽 또는 아래쪽 가장자리를 드래그하면 크기를 조절할 수 있습니다.";
+"Trouble with the result? Trim unwanted start or end frames. If possible, use a larger stitch window while keeping fixed controls outside it. Slower, steadier scrolling can also help." = "결과에 문제가 있나요? 시작이나 끝의 불필요한 프레임을 자르세요. 가능하면 고정된 컨트롤을 제외한 상태로 스티치 영역을 더 넓게 설정하세요. 더 느리고 일정하게 스크롤하는 것도 도움이 됩니다.";
+"Preview trimmed video" = "트리밍한 동영상 미리보기";
+"Done" = "완료";

@@ -80,3 +80,9 @@
 "or buy a coffee" = "或請一杯咖啡";
 "Leave a Review on the App Store" = "前往 App Store 評價";
 "Three Coffees" = "三杯咖啡";
+"Adjust Stitch Window" = "調整拼接視窗";
+"Use the largest clean area you can, keeping fixed controls and other non-scrolling content outside the window." = "盡量選擇更大的乾淨區域，同時將固定控制項和其他不捲動的內容留在視窗之外。";
+"Drag the window to move it. Drag its top or bottom edge to resize it." = "拖動視窗可移動位置。拖動上邊緣或下邊緣可調整高度。";
+"Trouble with the result? Trim unwanted start or end frames. If possible, use a larger stitch window while keeping fixed controls outside it. Slower, steadier scrolling can also help." = "結果不理想？請裁剪開頭或結尾不需要的影格。如果條件允許，請在排除固定控制項的同時擴大拼接視窗。放慢捲動並保持穩定也會有所幫助。";
+"Preview trimmed video" = "預覽裁剪後的影片";
+"Done" = "完成";

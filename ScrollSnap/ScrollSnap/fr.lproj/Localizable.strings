@@ -80,3 +80,9 @@
 "or buy a coffee" = "ou offrir un café";
 "Leave a Review on the App Store" = "Laisser un avis sur l’App Store";
 "Three Coffees" = "Trois cafés";
+"Adjust Stitch Window" = "Ajuster la zone d’assemblage";
+"Use the largest clean area you can, keeping fixed controls and other non-scrolling content outside the window." = "Utilisez la plus grande zone nette possible, en laissant les commandes fixes et les autres éléments non défilants hors de la fenêtre.";
+"Drag the window to move it. Drag its top or bottom edge to resize it." = "Faites glisser la zone pour la déplacer. Faites glisser son bord supérieur ou inférieur pour la redimensionner.";
+"Trouble with the result? Trim unwanted start or end frames. If possible, use a larger stitch window while keeping fixed controls outside it. Slower, steadier scrolling can also help." = "Un problème avec le résultat ? Éliminez les images indésirables au début ou à la fin. Si possible, utilisez une zone d’assemblage plus grande sans inclure les commandes fixes. Un défilement plus lent et régulier peut aussi aider.";
+"Preview trimmed video" = "Aperçu de la vidéo élaguée";
+"Done" = "Terminé";

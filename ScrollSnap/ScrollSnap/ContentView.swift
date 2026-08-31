@@ -73,6 +73,13 @@ private struct ProcessView: View {
     @State private var filmstripThumbnails: [UIImage] = []
     @State private var isLoadingFilmstrip = false
     @State private var filmstripTask: Task<Void, Never>?
+    @State private var stitchWindow = StitchWindow.default
+    @State private var isStitchWindowSheetPresented = false
+    @State private var stitchWindowSheetFrame: UIImage?
+    @State private var isLoadingStitchWindowSheetFrame = false
+    @State private var stitchWindowSheetTask: Task<Void, Never>?
+    @State private var draftStitchWindow = StitchWindow.defaultAdjustment
+    @State private var draftStitchWindowTime: Double = 0
 
     private let stitchingService = VideoStitchingService()
 
@@ -100,7 +107,7 @@ private struct ProcessView: View {
                     resultPreviewCard
 
                     Label(
-                        "If content looks missing or jumpy, try recording at a slower scroll speed. Use the trim handles above to exclude unwanted content at the start or end.",
+                        "Trouble with the result? Trim unwanted start or end frames. If possible, use a larger stitch window while keeping fixed controls outside it. Slower, steadier scrolling can also help.",
                         systemImage: "lightbulb"
                     )
                     .font(.caption)
@@ -153,11 +160,34 @@ private struct ProcessView: View {
         .onDisappear {
             processingTask?.cancel()
             filmstripTask?.cancel()
+            stitchWindowSheetTask?.cancel()
         }
         .animation(.none, value: isPinnedStateCardVisible)
         .sheet(isPresented: $showSupportPrompt) {
             SupportPromptSheet()
                 .environmentObject(supportStore)
+        }
+        .sheet(isPresented: $isStitchWindowSheetPresented) {
+            NavigationStack {
+                StitchWindowSheet(
+                    previewImage: stitchWindowSheetFrame,
+                    isLoading: isLoadingStitchWindowSheetFrame,
+                    thumbnails: filmstripThumbnails,
+                    videoDuration: videoTotalDuration,
+                    window: $draftStitchWindow,
+                    previewTime: $draftStitchWindowTime,
+                    trimStart: trimStart,
+                    trimEnd: trimEnd,
+                    onPreviewTimeChange: { time in
+                        loadStitchWindowSheetFrame(at: time)
+                    },
+                    onConfirm: {
+                        stitchWindow = draftStitchWindow
+                    }
+                )
+            }
+            .presentationDetents([.large])
+            .interactiveDismissDisabled(false)
         }
     }
 
@@ -315,6 +345,29 @@ private struct ProcessView: View {
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
+
+            Button {
+                draftStitchWindow = stitchWindow.isDefault
+                    ? .defaultAdjustment
+                    : stitchWindow
+                draftStitchWindowTime = trimStart
+                stitchWindowSheetFrame = nil
+                loadStitchWindowSheetFrame(at: trimStart)
+                isStitchWindowSheetPresented = true
+            } label: {
+                HStack {
+                    Label("Adjust Stitch Window", systemImage: "rectangle.dashed")
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .font(.subheadline.weight(.medium))
+                .padding(.vertical, 4)
+                .frame(maxWidth: .infinity)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
         }
         .padding(16)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
@@ -349,6 +402,36 @@ private struct ProcessView: View {
         await MainActor.run {
             filmstripThumbnails = thumbnails
             isLoadingFilmstrip = false
+        }
+    }
+
+    private func loadStitchWindowSheetFrame(at time: Double) {
+        stitchWindowSheetTask?.cancel()
+        guard let url = selectedVideoURL, videoTotalDuration > 0 else {
+            stitchWindowSheetFrame = nil
+            isLoadingStitchWindowSheetFrame = false
+            return
+        }
+
+        if !filmstripThumbnails.isEmpty {
+            let lastIndex = filmstripThumbnails.count - 1
+            let fraction = min(max(0, time / videoTotalDuration), 1)
+            let index = min(lastIndex, max(0, Int((fraction * Double(lastIndex)).rounded())))
+            stitchWindowSheetFrame = filmstripThumbnails[index]
+        }
+        isLoadingStitchWindowSheetFrame = true
+        stitchWindowSheetTask = Task {
+            let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
+            generator.appliesPreferredTrackTransform = true
+            generator.requestedTimeToleranceBefore = CMTime(seconds: 0.05, preferredTimescale: 600)
+            generator.requestedTimeToleranceAfter = CMTime(seconds: 0.05, preferredTimescale: 600)
+            let safeTime = min(max(trimStart, time), max(trimStart, trimEnd - 0.05))
+            let frame = try? await generator.image(at: CMTime(seconds: safeTime, preferredTimescale: 600)).image
+            await MainActor.run {
+                guard !Task.isCancelled else { return }
+                stitchWindowSheetFrame = frame.map(UIImage.init)
+                isLoadingStitchWindowSheetFrame = false
+            }
         }
     }
 
@@ -453,6 +536,8 @@ private struct ProcessView: View {
             filmstripThumbnails = []
             trimStart = 0
             trimEnd = 0
+            stitchWindowSheetFrame = nil
+            stitchWindow = StitchWindow.default
             return
         }
 
@@ -482,6 +567,8 @@ private struct ProcessView: View {
                     videoTotalDuration = totalDur
                     trimStart = 0
                     trimEnd = totalDur
+                    stitchWindow = StitchWindow.default
+                    draftStitchWindowTime = 0
                 }
                 filmstripTask?.cancel()
                 filmstripTask = Task { await loadFilmstrip(url: imported.url, duration: totalDur) }
@@ -528,7 +615,8 @@ private struct ProcessView: View {
                 let image = try await stitchingService.stitch(
                     videoURL: selectedVideoURL,
                     startTime: trimStart,
-                    endTime: trimEnd
+                    endTime: trimEnd,
+                    window: stitchWindow
                 ) { progress in
                     Task { @MainActor in
                         self.progressValue = progress
@@ -1050,6 +1138,383 @@ private struct VideoTimeline: View {
                 }
             } catch { }
         }
+    }
+}
+
+private struct StitchWindowSelection: View {
+    let frame: CGRect
+    let onMove: (CGFloat) -> Void
+    let onResizeTop: (CGFloat) -> Void
+    let onResizeBottom: (CGFloat) -> Void
+    let onGestureEnded: () -> Void
+
+    var body: some View {
+        Rectangle()
+            .fill(Color.accentColor.opacity(0.12))
+            .overlay(Rectangle().strokeBorder(.black.opacity(0.85), lineWidth: 5))
+            .overlay(Rectangle().strokeBorder(.white, lineWidth: 2))
+            .overlay {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .padding(.vertical, 28)
+                    .gesture(resizeGesture(onChanged: onMove))
+            }
+            .overlay(alignment: .top) {
+                resizeHandle
+                    .offset(y: -14)
+                    .highPriorityGesture(resizeGesture(onChanged: onResizeTop))
+            }
+            .overlay(alignment: .bottom) {
+                resizeHandle
+                    .offset(y: 14)
+                    .highPriorityGesture(resizeGesture(onChanged: onResizeBottom))
+            }
+            .frame(width: frame.width, height: frame.height)
+            .position(x: frame.midX, y: frame.midY)
+    }
+
+    private var resizeHandle: some View {
+        Color.clear
+            .frame(width: 64, height: 28)
+            .contentShape(Rectangle())
+            .overlay {
+                Capsule()
+                    .fill(.white)
+                    .frame(width: 44, height: 5)
+                    .overlay(Capsule().stroke(.black.opacity(0.85), lineWidth: 1))
+                    .shadow(color: .black.opacity(0.35), radius: 2)
+            }
+    }
+
+    private func resizeGesture(onChanged: @escaping (CGFloat) -> Void) -> some Gesture {
+        DragGesture(coordinateSpace: .global)
+            .onChanged { value in
+                onChanged(value.translation.height)
+            }
+            .onEnded { _ in
+                onGestureEnded()
+            }
+    }
+}
+
+private struct StitchWindowBackdrop: View {
+    let imageFrame: CGRect
+    let windowFrame: CGRect
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Color.black.opacity(0.42)
+                .frame(height: max(0, windowFrame.minY - imageFrame.minY))
+            Color.clear
+                .frame(height: max(0, windowFrame.height))
+            Color.black.opacity(0.42)
+                .frame(height: max(0, imageFrame.maxY - windowFrame.maxY))
+        }
+        .frame(width: imageFrame.width, height: imageFrame.height)
+        .position(x: imageFrame.midX, y: imageFrame.midY)
+        .allowsHitTesting(false)
+    }
+}
+
+private struct StitchWindowSheet: View {
+    let previewImage: UIImage?
+    let isLoading: Bool
+    let thumbnails: [UIImage]
+    let videoDuration: Double
+    @Binding var window: StitchWindow
+    @Binding var previewTime: Double
+    let trimStart: Double
+    let trimEnd: Double
+    let onPreviewTimeChange: (Double) -> Void
+    let onConfirm: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var gestureStartWindow: StitchWindow?
+
+    private var minimumWindowHeight: Double {
+        StitchWindow.minimumHeight(forPixelHeight: Double(previewImage?.size.height ?? 0))
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Use the largest clean area you can, keeping fixed controls and other non-scrolling content outside the window.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                GeometryReader { geometry in
+                    let imageFrame = renderedImageFrame(in: geometry.size)
+
+                    ZStack {
+                        if let previewImage {
+                            let windowFrame = overlayFrame(in: imageFrame)
+
+                            Image(uiImage: previewImage)
+                                .resizable()
+                                .scaledToFit()
+                                .frame(width: geometry.size.width, height: geometry.size.height)
+
+                            StitchWindowBackdrop(imageFrame: imageFrame, windowFrame: windowFrame)
+
+                            StitchWindowSelection(
+                                frame: windowFrame,
+                                onMove: { translation in
+                                    moveWindow(by: translation, in: imageFrame)
+                                },
+                                onResizeTop: { translation in
+                                    resizeWindowTop(by: translation, in: imageFrame)
+                                },
+                                onResizeBottom: { translation in
+                                    resizeWindowBottom(by: translation, in: imageFrame)
+                                },
+                                onGestureEnded: {
+                                    gestureStartWindow = nil
+                                }
+                            )
+                        } else {
+                            Rectangle()
+                                .fill(.quaternary)
+                                .overlay {
+                                    if isLoading {
+                                        ProgressView()
+                                    } else {
+                                        Image(systemName: "photo")
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                        }
+                    }
+                }
+                .frame(height: 360)
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+
+                Text("Drag the window to move it. Drag its top or bottom edge to resize it.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Preview trimmed video")
+                        .font(.headline)
+
+                    scrubber
+
+                    HStack {
+                        Text(formatSheetDuration(trimStart))
+                        Spacer()
+                        Text(formatSheetDuration(previewTime))
+                            .fontWeight(.semibold)
+                        Spacer()
+                        Text(formatSheetDuration(trimEnd))
+                    }
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                }
+            }
+            .padding(20)
+        }
+        .navigationTitle("Adjust Stitch Window")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button {
+                    dismiss()
+                } label: {
+                    Text("Cancel")
+                }
+            }
+
+            ToolbarItem(placement: .confirmationAction) {
+                Button {
+                    onConfirm()
+                    dismiss()
+                } label: {
+                    Text("Done")
+                }
+            }
+        }
+        .background(Color(.systemGroupedBackground))
+        .onAppear {
+            enforceMinimumWindowHeight()
+        }
+        .onChange(of: previewImage?.size.height) {
+            enforceMinimumWindowHeight()
+        }
+    }
+
+    private var scrubber: some View {
+        GeometryReader { geometry in
+            let fraction = previewFraction
+            let playheadX = fraction * geometry.size.width
+
+            ZStack(alignment: .topLeading) {
+                timelineFilmstrip
+                    .frame(height: 54)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .stroke(.white.opacity(0.7), lineWidth: 1)
+                    }
+                    .offset(y: 7)
+
+                Capsule()
+                    .fill(.white)
+                    .frame(width: 3, height: 54)
+                    .shadow(color: .black.opacity(0.35), radius: 2)
+                    .position(x: playheadX, y: 34)
+
+                Circle()
+                    .fill(.white)
+                    .frame(width: 18, height: 18)
+                    .overlay(Circle().stroke(Color.accentColor, lineWidth: 2))
+                    .shadow(color: .black.opacity(0.3), radius: 2)
+                    .position(x: min(max(9, playheadX), max(9, geometry.size.width - 9)), y: 9)
+            }
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        updatePreviewTime(at: value.location.x, width: geometry.size.width)
+                    }
+            )
+        }
+        .frame(height: 64)
+        .accessibilityLabel(Text("Preview trimmed video"))
+        .accessibilityValue(Text(formatSheetDuration(previewTime)))
+        .accessibilityAdjustableAction { direction in
+            let step = max((trimEnd - trimStart) / 20, 0.1)
+            switch direction {
+            case .increment:
+                setPreviewTime(min(trimEnd, previewTime + step))
+            case .decrement:
+                setPreviewTime(max(trimStart, previewTime - step))
+            @unknown default:
+                break
+            }
+        }
+    }
+
+    private var previewFraction: CGFloat {
+        guard trimEnd > trimStart else { return 0 }
+        return CGFloat(min(max(0, (previewTime - trimStart) / (trimEnd - trimStart)), 1))
+    }
+
+    private func updatePreviewTime(at x: CGFloat, width: CGFloat) {
+        guard width > 0 else { return }
+        let fraction = min(max(0, x / width), 1)
+        setPreviewTime(trimStart + Double(fraction) * (trimEnd - trimStart))
+    }
+
+    private func setPreviewTime(_ time: Double) {
+        previewTime = time
+        onPreviewTimeChange(time)
+    }
+
+    private func moveWindow(by translation: CGFloat, in imageFrame: CGRect) {
+        guard imageFrame.height > 0 else { return }
+        let start = startWindowForGesture()
+        let delta = Double(translation / imageFrame.height)
+        window.y = min(max(0, start.y + delta), max(0, 1 - start.height))
+    }
+
+    private func resizeWindowTop(by translation: CGFloat, in imageFrame: CGRect) {
+        guard imageFrame.height > 0 else { return }
+        let start = startWindowForGesture()
+        let bottom = start.y + start.height
+        let proposedTop = start.y + Double(translation / imageFrame.height)
+        let newTop = min(max(0, proposedTop), bottom - minimumWindowHeight)
+        window.y = newTop
+        window.height = bottom - newTop
+    }
+
+    private func resizeWindowBottom(by translation: CGFloat, in imageFrame: CGRect) {
+        guard imageFrame.height > 0 else { return }
+        let start = startWindowForGesture()
+        let proposedBottom = start.y + start.height + Double(translation / imageFrame.height)
+        let newBottom = min(max(start.y + minimumWindowHeight, proposedBottom), 1)
+        window.height = newBottom - start.y
+    }
+
+    private func startWindowForGesture() -> StitchWindow {
+        if let gestureStartWindow {
+            return gestureStartWindow
+        }
+        gestureStartWindow = window
+        return window
+    }
+
+    private func enforceMinimumWindowHeight() {
+        let minimumHeight = minimumWindowHeight
+        guard window.height < minimumHeight else { return }
+        let centerY = window.y + window.height / 2
+        window.height = minimumHeight
+        window.y = min(max(0, centerY - minimumHeight / 2), 1 - minimumHeight)
+    }
+
+    private var timelineFilmstrip: some View {
+        GeometryReader { geometry in
+            if trimmedThumbnails.isEmpty {
+                Rectangle()
+                    .fill(.quaternary)
+            } else {
+                HStack(spacing: 0) {
+                    ForEach(Array(trimmedThumbnails.enumerated()), id: \.offset) { _, thumbnail in
+                        Image(uiImage: thumbnail)
+                            .resizable()
+                            .scaledToFill()
+                            .frame(
+                                width: geometry.size.width / CGFloat(trimmedThumbnails.count),
+                                height: geometry.size.height
+                            )
+                            .clipped()
+                    }
+                }
+            }
+        }
+        .overlay(Color.black.opacity(0.16))
+    }
+
+    private var trimmedThumbnails: [UIImage] {
+        guard !thumbnails.isEmpty, videoDuration > 0 else { return [] }
+        guard thumbnails.count > 1 else { return thumbnails }
+
+        let lastIndex = thumbnails.count - 1
+        let startIndex = min(lastIndex, max(0, Int(floor(trimStart / videoDuration * Double(lastIndex)))))
+        let endIndex = min(lastIndex, max(startIndex, Int(ceil(trimEnd / videoDuration * Double(lastIndex)))))
+        return Array(thumbnails[startIndex...endIndex])
+    }
+
+    private func overlayFrame(in imageFrame: CGRect) -> CGRect {
+        CGRect(
+            x: imageFrame.minX + window.x * imageFrame.width,
+            y: imageFrame.minY + window.y * imageFrame.height,
+            width: window.width * imageFrame.width,
+            height: window.height * imageFrame.height
+        )
+    }
+
+    private func renderedImageFrame(in size: CGSize) -> CGRect {
+        guard let previewSize = previewImage?.size, size.width > 0, size.height > 0 else {
+            return .zero
+        }
+
+        let scale = min(size.width / previewSize.width, size.height / previewSize.height)
+        let renderedSize = CGSize(width: previewSize.width * scale, height: previewSize.height * scale)
+
+        return CGRect(
+            x: (size.width - renderedSize.width) / 2,
+            y: (size.height - renderedSize.height) / 2,
+            width: renderedSize.width,
+            height: renderedSize.height
+        )
+    }
+
+    private func formatSheetDuration(_ seconds: Double) -> String {
+        let value = max(0, seconds)
+        let minutes = Int(value) / 60
+        let secs = Int(value) % 60
+        let tenths = Int((value - floor(value)) * 10)
+        return String(format: "%d:%02d.%d", minutes, secs, tenths)
     }
 }
 
